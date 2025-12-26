@@ -3,12 +3,14 @@ from collections import Counter
 from itertools import product
 
 tol = 0
+all_solutions = False
+solutions = []
 
 '''
 Infinite randomized test cases implemented tomorrow.
 '''
 
-class mapping:
+class Mapping:
     def __init__(self, length = 0):
         self.sites = {}
         self.length = length
@@ -93,6 +95,44 @@ class mapping:
             dist = (next_pos - pos) if next_pos > pos else (self.length - pos + next_pos)
             output.append(f"[{enzs} @ {pos}] ==({round(dist, 1)})==")
         return " ".join(output)
+
+    def get_sig(self):
+        """
+        Returns a normalized representation of the plasmid.
+        """
+        # 1. Get all sites sorted by position
+        sorted_sites = sorted(self.sites.items())
+        if not sorted_sites: return None
+        # 2. Extract relative distances and enzyme sets
+        # (Distances between sites and the enzymes at those sites)
+        n = len(sorted_sites)
+        rotations = []
+        for i in range(n):
+            # Rotate the list so site 'i' is the start
+            rotated = sorted_sites[i:] + sorted_sites[:i]
+            # Create a representation: ((enzymes), dist_to_next, (enzymes), dist_to_next...)
+            # We normalize positions to relative distances
+            forward = []
+            for j in range(n):
+                pos, enz = rotated[j]
+                next_pos = rotated[(j + 1) % n][0]
+                dist = (next_pos - pos) % self.length
+                forward.append((tuple(sorted(enz)), round(dist, 4)))
+            # Forward direction
+            rotations.append(tuple(forward))
+            # Mirror (Reverse) direction
+            # We flip the sequence of distances and enzyme sets
+            backward = []
+            for j in range(n, 0, -1):
+                idx = j % n
+                prev_idx = (j - 1) % n
+                pos, enz = rotated[idx]
+                prev_pos = rotated[prev_idx][0]
+                dist = (pos - prev_pos) % self.length
+                backward.append((tuple(sorted(rotated[idx][1])), round(dist, 4)))
+            rotations.append(tuple(backward))
+        # The 'signature' is the smallest version
+        return min(rotations)
 
 def coverage_possibilities(actual, simulated):
     """
@@ -185,73 +225,87 @@ def find_length(chain):
     '''
 
 def build_canonical(chain):
+    global solutions
+    solutions = []
     length = find_length(chain)
     if not length:
         print("Bad digests: Total lengths are inconsistent.")
         return None
     #initialize the plasmid as one continuous 'fragment' with no enzymes yet
     #position starts at 0, length is the total plasmid size
-    initial_map = mapping(length=length)
+    initial_map = Mapping(length=length)
     result_map = recurse(initial_map, chain)
-    return result_map
+    unique_maps = []
+    seen_signatures = set()
+    for mapping in solutions:
+        sig = mapping.get_sig() # Ensure this method name matches
+        if sig not in seen_signatures:
+            unique_maps.append(mapping)
+            seen_signatures.add(sig)
+    return unique_maps
 
 def recurse(current_mapping, remaining_digests):
+    global solutions
+    
+    # BASE CASE
     if not remaining_digests:
-        return current_mapping
+        solutions.append(current_mapping)
+        # We return True to indicate a path was found, but the parent
+        # loop will keep running to find OTHER paths.
+        return True 
 
     enzymes_in_digest, actual_frags = remaining_digests[0]
-    #check what enzymes we already have on our map
     shared_enzymes = set(enzymes_in_digest) & current_mapping.known_enzymes
     new_enzymes = list(set(enzymes_in_digest) - current_mapping.known_enzymes)
-    #1. identify the 'buckets' currently defined by shared enzymes
+
     buckets = current_mapping.get_buckets(shared_enzymes)
     simulated_lengths = [b[1] for b in buckets]
-    #2. find all ways the lab results can fit into these buckets
     possibilities = coverage_possibilities(actual_frags, simulated_lengths)
+    
     if not possibilities:
-        return None
+        return False
 
-    #3. VERIFY: if no new enzymes to place
-    if not new_enzymes:
-        for division in possibilities:
-            #if every superfragment contains exactly 1 subfragment, it's a perfect match. basically a uniqueness proof
-            if all(len(subgroup) == 1 for subgroup in division):
-                return recurse(current_mapping, remaining_digests[1:])
-        return None
+    found_at_least_one = False
 
-    #4. EXPLORE SOLUTION SPACE: place new enzymes
+    # VERIFY/EXPLORE
     for division in possibilities:
-        #each internal split in a bucket needs a cut (e.g., [3000, 2000] needs 1 cut)
+        if not new_enzymes:
+            if all(len(subgroup) == 1 for subgroup in division):
+                if recurse(current_mapping, remaining_digests[1:]):
+                    found_at_least_one = True
+            continue # Try next division
+
         num_internal_cuts = sum(len(subgroup) - 1 for subgroup in division)
-        #seed case: mapping hasn't started yet, generally the first digest unless no enzymes cut
         if not shared_enzymes:
             num_internal_cuts = len(division[0])
-        #try all permutations of the new enzymes in the available cut slots
+
         for enz_setup in product(new_enzymes, repeat=num_internal_cuts):
-            trial_map = copy.deepcopy(current_mapping) #deepcopy allows for backtracking. remove this and you're gambling on correctness
+            trial_map = copy.deepcopy(current_mapping)
             new_sites_to_add = []
             enz_iter = iter(enz_setup)
+            
             for i, subgroup in enumerate(division):
-                #start at the beginning of the superfrag
                 curr_abs_pos, _ = buckets[i]
-                #we place cuts between the lengths in the subgroup, indicating subfrag boundaries
-                #(if it's a seed case, we assume every piece needs a cut)
-                pieces_to_process = subgroup if not shared_enzymes else subgroup[:-1]
-                for length in pieces_to_process:
+                pieces = subgroup if not shared_enzymes else subgroup[:-1]
+                for length in pieces:
                     curr_abs_pos = (curr_abs_pos + length) % trial_map.length
                     new_sites_to_add.append((curr_abs_pos, next(enz_iter)))
+            
             trial_map.add_sites(new_sites_to_add)
-            #print(trial_map.format_map())
-            #verify!: does the trial map actually produce the full digest, as we took as input?
-            #print(trial_map.simulate_digest(enzymes_in_digest))
-            #print(actual_frags)
+
             if Counter(trial_map.simulate_digest(enzymes_in_digest)) == Counter(actual_frags):
-                #print("in counter")
-                #for tracing
-                result = recurse(trial_map, remaining_digests[1:])
-                if result:
-                    return result
-    return None
+                # IMPORTANT: We do NOT return immediately. 
+                # We record that we found one and let the loop continue.
+                if recurse(trial_map, remaining_digests[1:]):
+                    found_at_least_one = True
+                    if not all_solutions: # If user only wants the first one found
+                        return True
+
+    return found_at_least_one
+
+def display_mappings(solution):
+    for mapping in solution:
+        print(mapping.format_map())
 
 if __name__=="__main__":
     A = (["EcoRI"], [6000, 4000])
@@ -267,5 +321,5 @@ if __name__=="__main__":
     chain = build_chain(test)
     print("Chain order:", chain)
     print()
-    mapping = build_canonical(chain)
-    print(mapping.format_map())
+    maps = build_canonical(chain)
+    display_mappings(maps)
