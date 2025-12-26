@@ -1,17 +1,21 @@
+import copy
 from collections import Counter
+from itertools import product
 
 tolerance = 0
+
 Digest = tuple[list[str], list[float]]
 
 class f:
-    def __init__(self, start = None, end = None, length = 0, position = 0):
-        self.startEnzyme = start #there is redundancy here, but I like it
-        #this means not needing to find the enzyme responsible for the start of the fragment
-        self.endEnzyme = end #enzyme responsible for end of the fragment
-        self.length = length #length of fragment
-        self.startPosition = position #start position of fragment
+    def __init__(self, start=None, end=None, length=0, position=0):
+        self.startEnzyme = start
+        self.endEnzyme = end
+        self.length = length
+        self.startPosition = position
+    
+    def __repr__(self):
+        return f"f({self.startEnzyme}, {self.endEnzyme}, {self.length}, {self.startPosition})"
 
-#n_sum, the first helper function, mainly replaced by coverage_possibilities
 def n_sum(fragments, total):
     groups = []
     n = len(fragments)
@@ -24,19 +28,17 @@ def n_sum(fragments, total):
         if remain < -tolerance:
             return
 
-        for i in range (x, n):
+        for i in range(x, n):
             if remain - fragments[i] >= -tolerance:
                 current_path.append(i)
-                #becomes an n-1-sum problem to find the others in the group.
-                #much better than the 2^n memory or n^2 time approach
                 backtrack(i+1, remain-fragments[i], current_path)
                 current_path.pop()
     backtrack(0, total, [])
     return groups
 
 def coverage_possibilities(subfragments, superfragments):
-    subfragments = sorted(subfragments, reverse = True)
-    superfragments = sorted(superfragments, reverse = True)
+    subfragments = sorted(subfragments, reverse=True)
+    superfragments = sorted(superfragments, reverse=True)
 
     results = []
     def backtrack(remaining_frags, superfrag_index, curr):
@@ -72,26 +74,20 @@ def coverage_possibilities(subfragments, superfragments):
             remaining = remaining_frags.copy()
             for x in subset:
                 remaining.remove(x)
-            backtrack(
-                remaining, superfrag_index + 1, curr + [subset]
-            )
+            backtrack(remaining, superfrag_index + 1, curr + [subset])
     backtrack(subfragments, 0, [])
     return results
                 
 def find_boundaries(digest1, digest2):
-    #quick for perfect accuracy, should be good for manual inputs
     if tolerance == 0:
         return set(digest1) & set(digest2)
 
-    #log() approach, should work if bad manual inputs or read from a picture
     shared = set()
     sorted1 = sorted(digest1)
     sorted2 = sorted(digest2)
-    shared = set()
     i = 0
     j = 0
 
-    #2 pointer approach
     while i < len(sorted1) and j < len(sorted2):
         diff = sorted1[i] - sorted2[j]
         if abs(diff) <= tolerance:
@@ -104,11 +100,10 @@ def find_boundaries(digest1, digest2):
             j = j + 1
     return shared
 
-
 def build_superfragments(superfrags, subfrags):
     groups = []
     for superfrag in superfrags:
-        subgroups = nsum(subfrags, superfrag)
+        subgroups = n_sum(subfrags, superfrag)
         groups.append((superfrag, subgroups)) 
     return groups
 
@@ -125,13 +120,13 @@ def build_chain(digests):
             new_enzymes = set(enzymes) - seen_enzymes
             new_frags = set(frags) - seen_fragments
             common_enzymes = set(enzymes) & seen_enzymes
-            #score = (len(new_enzymes), len(new_frags))
             score = (len(new_enzymes) + 1)**2 + len(new_frags) - ((len(common_enzymes) + 3)**1.5)
+            overlap = len(set(enzymes) & seen_enzymes)
+            if seen_enzymes and overlap == 0:
+                score += 1000  # hard shove to the end
             scored.append((score, d))
-        #choose digest with minimal (new enzymes, new fragments)
         scored.sort(key=lambda x: x[0])
         best = scored[0][1]
-        #update state
         enzymes, frags = best
         seen_enzymes.update(enzymes)
         seen_fragments.update(frags)
@@ -145,243 +140,378 @@ def find_length(chain):
         sampling.append(sum(digest[1]))
     average = sum(sampling)/len(sampling)
     for length in sampling:
-        if not (0.9*average < length and length < 1.1*average):
+        if not (0.9*average < length < 1.1*average):
             return False
     return average
 
 def build_canonical(chain):
-    if not find_length(chain):
-        print("Bad digests")
-        return 
-    plasmid = [f(None, None, find_length(chain))]
-    ndigest = recurse(plasmid, chain, chain)
-    return ndigest
+    length = find_length(chain)
+    if not length:
+        print("Bad digests: Total lengths are inconsistent.")
+        return None
+    # Initialize the plasmid as one continuous fragment with no enzymes yet
+    # Position starts at 0, length is the total plasmid size.
+    initial_map = [f(start=None, end=None, length=length, position=0)]
+    # Start the recursion
+    result_map = recurse(initial_map, chain, chain)
+    return result_map
 
 def simulate_digest(current_map, enzymes):
-    """
-    Simulates a restriction digest on the current map using specified enzymes.
-    Returns a sorted list of fragment lengths.
-    """
-    #collect all cut positions for these enzymes
-    cut_positions = set()
-    
-    for fragment in current_map:
-        #check if this fragment's end is cut by one of our enzymes
-        if fragment.endEnzyme in enzymes:
-            end_position = fragment.startPosition + fragment.length
-            cut_positions.add(end_position)
-    
-    #convert to sorted list
-    cut_positions = sorted(cut_positions)
-    
-    if not cut_positions:
-        # No cuts, return total length
-        return [sum(frag.length for frag in current_map)]
-    
-    #for circular plasmid, calculate fragments between cuts
-    total_length = sum(frag.length for frag in current_map)
+    if not enzymes:
+        return [sum(f.length for f in current_map)]
+
     simulated_frags = []
-    
-    for i in range(len(cut_positions)):
-        start = cut_positions[i]
-        end = cut_positions[(i + 1) % len(cut_positions)]
+    current_accumulator = 0.0
+
+    # Walk through fragments and "dissolve" boundaries that aren't in the digest
+    for frag in current_map:
+        current_accumulator += frag.length
         
-        if i == len(cut_positions) - 1:
-            #last fragment wraps around
-            simulated_frags.append(total_length - start + cut_positions[0])
-        else:
-            simulated_frags.append(end - start)
-    
+        # If the boundary at the END of this fragment is one of the enzymes 
+        # we are currently simulating, it's a "real" cut.
+        if frag.endEnzyme in enzymes:
+            simulated_frags.append(round(current_accumulator, 4))
+            current_accumulator = 0.0
+
+    # CIRCULAR WRAP-AROUND:
+    # If the last fragment didn't end in an active enzyme, the current_accumulator 
+    # contains the 'tail'. This tail must be merged with the 'head' (the first fragment).
+    if current_accumulator > 0:
+        if not simulated_frags:
+            # No cuts at all from these enzymes
+            return [sum(f.length for f in current_map)]
+        
+        # Add the tail to the first fragment (which represents the head)
+        simulated_frags[0] = round(simulated_frags[0] + current_accumulator, 4)
+
     return sorted(simulated_frags)
 
+def get_enzyme_assignments(new_enzymes, num_cuts):
+    """
+    Generated in-line in recurse using itertools.product.
+    This generates every permutation of new enzymes for the internal cuts.
+    """
+    return list(product(new_enzymes, repeat=num_cuts))
 
-def check_validity(current_map, chain):
+def find_mismatches(current_map_fragments, actual_digest_lengths):
     """
-    Validates the current mapping against all digests in the chain.
+    Compares map fragments against actual experimental lengths.
+    Returns: (mismatched_fragments, unused_actual_lengths)
     """
-    for digest in chain:
-        enzymes, expected_frags = digest
-        simulated = simulate_digest(current_map, enzymes)
-        
-        if Counter(simulated) != Counter(expected_frags):
-            return False
+    actual_counts = Counter(actual_digest_lengths)
+    mismatched_fragments = []
     
-    return True
+    # Check every fragment currently on the map
+    for fragment in current_map_fragments:
+        # If the fragment's length exists in the actual digest, 
+        # it means this piece was NOT cut further.
+        found_match = False
+        for length in actual_counts:
+            if abs(fragment.length - length) <= tolerance and actual_counts[length] > 0:
+                actual_counts[length] -= 1
+                found_match = True
+                break
+        # If it wasn't found, this specific fragment object is a "mismatch" that needs to be subdivided.
+        if not found_match:
+            mismatched_fragments.append(fragment)
+
+    # The remaining lengths in actual_counts are the "sub-fragments" created by the new enzyme cuts.
+    unused_actual_lengths = []
+    for length, count in actual_counts.items():
+        unused_actual_lengths.extend([length] * count)
+    # Validation: The sum of mismatched map fragments must equal the sum of the unused actual lengths (within tolerance).
+    if abs(sum(f.length for f in mismatched_fragments) - sum(unused_actual_lengths)) > tolerance:
+        return None
+    return mismatched_fragments, unused_actual_lengths
+
+def format_map(current_map):
+    if not current_map:
+        return "Empty Map"
+    
+    # We build a string showing the start enzyme and the length of each fragment
+    parts = []
+    for frag in current_map:
+        start = frag.startEnzyme if frag.startEnzyme else "???"
+        parts.append(f"{start} ={int(frag.length)}=")
+    
+    # Add the closing enzyme of the last fragment to complete the circle
+    final_enz = current_map[-1].endEnzyme if current_map[-1].endEnzyme else "???"
+    return " ".join(parts) + f" {final_enz}"
 
 
-def find_mismatches(simulated_frags, actual_frags):
-    """
-    Finds fragments that don't match between simulated and actual digests.
-    Returns (mismatched_old, mismatched_new) where old fragments were cut into new fragments.
-    """
-    sim_counter = Counter(simulated_frags)
-    actual_counter = Counter(actual_frags)
-    
-    #find fragments only in simulated (these got cut)
-    mismatched_old = []
-    for frag, count in sim_counter.items():
-        actual_count = actual_counter.get(frag, 0)
-        if count > actual_count:
-            mismatched_old.extend([frag] * (count - actual_count))
-    
-    #find fragments only in actual (these are the cut pieces)
-    mismatched_new = []
-    for frag, count in actual_counter.items():
-        sim_count = sim_counter.get(frag, 0)
-        if count > sim_count:
-            mismatched_new.extend([frag] * (count - sim_count))
-    
-    return sorted(mismatched_old, reverse=True), sorted(mismatched_new, reverse=True)
-
-
-def insert_cuts(current_map, division, old_frags, new_enzyme, known_enzymes):
-    """
-    Inserts new enzyme cuts into the map based on the division pattern.
-    division: list of lists, where each sublist shows how an old fragment was divided
-    old_frags: the fragments that were cut
-    new_enzyme: the enzyme making the new cuts
-    
-    Example: A 10000 A -> A 4000 B | B 3000 B | B 2000 B | B 1000 A
-    """
+def insert_cuts_multi_enzyme(current_map, division, mismatched_frags, enzyme_setup):
     new_map = []
-    old_frag_iter = iter(old_frags)
-    current_old_frag = next(old_frag_iter, None)
-    division_index = 0
+    enz_iter = iter(enzyme_setup)
     
+    # Now replacements correctly maps the IDs of fragments inside the TRIAL map
+    replacements = {id(frag): sub_lengths for frag, sub_lengths in zip(mismatched_frags, division)}
+
     for fragment in current_map:
-        #checks if this fragment needs to be divided
-        if current_old_frag is not None and abs(fragment.length - current_old_frag) < tolerance + 0.01:
-            #gets divided according to division pattern
-            sub_frags = division[division_index]
-            position = fragment.startPosition
-            
-            for i, sub_length in enumerate(sub_frags):
-                if i == 0:
-                    #first piece: keeps original start enzyme, ends with new enzyme
-                    new_map.append(f(fragment.startEnzyme, new_enzyme, sub_length, position))
-                elif i < len(sub_frags) - 1:
-                    #middle pieces: start and end with new enzyme
-                    new_map.append(f(new_enzyme, new_enzyme, sub_length, position))
-                else:
-                    #last piece: starts with new enzyme, keeps original end enzyme
-                    new_map.append(f(new_enzyme, fragment.endEnzyme, sub_length, position))
-                position += sub_length
-            
-            division_index += 1
-            current_old_frag = next(old_frag_iter, None)
+        # If this fragment isn't one of the targets, just pass it through
+        if id(fragment) not in replacements:
+            new_map.append(fragment)
+            continue
+        
+        sub_lengths = replacements[id(fragment)]
+        current_pos = fragment.startPosition
+
+        # CASE: Seeding the blank plasmid
+        if fragment.startEnzyme is None:
+            seeding_enz = enzyme_setup[0]
+            for length in sub_lengths:
+                new_map.append(f(seeding_enz, seeding_enz, length, current_pos))
+                current_pos += length
+        
+        # CASE: Subdividing an existing marked fragment
         else:
-            #fragment unchanged, just maybe update position
-            new_map.append(f(fragment.startEnzyme, fragment.endEnzyme, fragment.length, fragment.startPosition))
+            last_new_enz = fragment.startEnzyme
+            for i, length in enumerate(sub_lengths):
+                start_enz = last_new_enz
+                if i == len(sub_lengths) - 1:
+                    end_enz = fragment.endEnzyme
+                else:
+                    try:
+                        end_enz = next(enz_iter)
+                    except StopIteration:
+                        end_enz = enzyme_setup[0]
+                    last_new_enz = end_enz
+                
+                new_map.append(f(start_enz, end_enz, length, current_pos))
+                current_pos += length
+                
     return new_map
 
+def insert_cuts_multi_group(current_map, division, map_groups_to_cut, enzyme_setup):
+    new_map = []
+    enz_iter = iter(enzyme_setup)
+    
+    # map_groups_to_cut: [[frag1, frag2], [frag3], ...]
+    # division: [[3000, 2000], [1500, 1500], ...]
+    
+    # We use the ID of the FIRST fragment in each group as the trigger
+    # for the replacement, and mark the others for deletion.
+    replacements = {}
+    for group, sub_lengths in zip(map_groups_to_cut, division):
+        replacements[id(group[0])] = (sub_lengths, group)
+        for extra_frag in group[1:]:
+            replacements[id(extra_frag)] = (None, None) 
 
-def recurse(current_map, remaining_digests, chain):
-    """
-    Recursively builds the plasmid map by placing enzyme cut sites.
-    Compares simulated digest with actual digest to find where new enzymes cut.
-    """
-    visualize_map(current_map)
+    for fragment in current_map:
+        fid = id(fragment)
+        if fid not in replacements:
+            new_map.append(fragment)
+            continue
+        
+        sub_lengths, group = replacements[fid]
+        
+        # If this fragment was part of a group but not the leader, skip it (it's "consumed")
+        if sub_lengths is None:
+            continue
+            
+        current_pos = fragment.startPosition
+        
+        # CASE: Initial seeding of the plasmid
+        if fragment.startEnzyme is None:
+            seeding_enz = enzyme_setup[0]
+            for length in sub_lengths:
+                new_map.append(f(seeding_enz, seeding_enz, length, current_pos))
+                current_pos += length
+        else:
+            # The 'end enzyme' of our new chain must match the 'end enzyme' 
+            # of the LAST fragment in the original group we are replacing.
+            final_end_enzyme = group[-1].endEnzyme
+            
+            last_new_enz = fragment.startEnzyme
+            for i, length in enumerate(sub_lengths):
+                start_enz = last_new_enz
+                if i == len(sub_lengths) - 1:
+                    end_enz = final_end_enzyme
+                else:
+                    try:
+                        end_enz = next(enz_iter)
+                    except StopIteration:
+                        # This happens if a bucket has no new internal cuts
+                        end_enz = last_new_enz
+                    last_new_enz = end_enz
+                
+                new_map.append(f(start_enz, end_enz, length, current_pos))
+                current_pos += length
+                
+    return new_map
+
+def find_mismatches_by_length(simulated_lengths, actual_lengths):
+    sim_counts = Counter(simulated_lengths)
+    act_counts = Counter(actual_lengths)
     
+    # Remove fragments that match exactly
+    for length in list(sim_counts.keys()):
+        if length in act_counts:
+            match_count = min(sim_counts[length], act_counts[length])
+            sim_counts[length] -= match_count
+            act_counts[length] -= match_count
+
+    mismatched_sim = []
+    for length, count in sim_counts.items():
+        if count > 0: mismatched_sim.extend([length] * count)
+        
+    mismatched_act = []
+    for length, count in act_counts.items():
+        if count > 0: mismatched_act.extend([length] * count)
+
+    # SUCCESS: Map matches lab data perfectly
+    if not mismatched_sim and not mismatched_act:
+        return [], []
+
+    # CONTRADICTION: Lab has pieces, but map has no length to provide them
+    if not mismatched_sim and mismatched_act:
+        return None
+
+    # CONTRADICTION: Largest lab piece is bigger than largest available map gap
+    if mismatched_act and max(mismatched_act) > max(mismatched_sim):
+        return None
+
+    # CONTRADICTION: Mass balance failure
+    if abs(sum(mismatched_sim) - sum(mismatched_act)) > tolerance:
+        return None
+        
+    return mismatched_sim, mismatched_act
+
+def identify_map_groups_ordered(current_map, simulated_lengths, active_enzymes):
+    total_len = sum(f.length for f in current_map)
+    
+    # Get all start positions of fragments whose START or END is an active enzyme
+    cut_positions = []
+    for f in current_map:
+        if f.startEnzyme in active_enzymes:
+            cut_positions.append(round(f.startPosition % total_len, 4))
+            
+    cut_positions = sorted(list(set(cut_positions)))
+    
+    if not cut_positions:
+        return [current_map]
+
+    physical_buckets = []
+    for i, start_pos in enumerate(cut_positions):
+        end_pos = cut_positions[(i + 1) % len(cut_positions)]
+        target_len = (end_pos - start_pos) if end_pos > start_pos else (total_len - start_pos + end_pos)
+        
+        # Find the fragment that starts at start_pos
+        # Use a small tolerance for float comparison
+        found_idx = None
+        for idx, f in enumerate(current_map):
+            if abs((f.startPosition % total_len) - start_pos) < 0.1:
+                found_idx = idx
+                break
+        
+        if found_idx is None:
+            return None # This triggers the backtrack safely instead of crashing
+            
+        group = []
+        acc_len = 0
+        while acc_len < target_len - 0.1:
+            curr_f = current_map[found_idx % len(current_map)]
+            group.append(curr_f)
+            acc_len += curr_f.length
+            found_idx += 1
+        physical_buckets.append((round(acc_len, 4), group))
+
+    # Align with simulated_lengths order
+    ordered_groups = []
+    temp_physical = list(physical_buckets)
+    for s_len in simulated_lengths:
+        match = next((p for p in temp_physical if abs(p[0] - s_len) < 0.1), None)
+        if match:
+            ordered_groups.append(match[1])
+            temp_physical.remove(match)
+        else:
+            return None
+            
+    return ordered_groups
+
+def recurse(current_map, remaining_digests, full_chain):
+    input()
+    print("\nStarting recurse call")
+    print(format_map(current_map))
+    print(remaining_digests[0])
     if not remaining_digests:
-        return current_map if check_validity(current_map, chain) else None
+        return current_map
+
+    enzymes_in_digest, actual_frags = remaining_digests[0]
+    known_on_map = {f.startEnzyme for f in current_map if f.startEnzyme} | \
+                   {f.endEnzyme for f in current_map if f.endEnzyme}
     
-    current_digest = remaining_digests[0]
-    new_enzymes, new_fragments = current_digest
+    shared_enzymes = set(enzymes_in_digest) & known_on_map
+    new_enzymes = list(set(enzymes_in_digest) - known_on_map)
+
+    # These are our "Super-fragment" lengths
+    print(shared_enzymes)
+    simulated_lengths = simulate_digest(current_map, shared_enzymes)
+    print("Below are simulated lengths for the above enzymes")
+    print(simulated_lengths)
     
-    known_enzymes = set()
-    for frag in current_map:
-        if frag.endEnzyme is not None:
-            known_enzymes.add(frag.endEnzyme)
-        if frag.startEnzyme is not None:
-            known_enzymes.add(frag.startEnzyme)
+    # These are all possible ways actual_frags fit into simulated_lengths
+    possibilities = coverage_possibilities(actual_frags, simulated_lengths)
+    print(possibilities)
     
-    new_enzyme_set = set(new_enzymes) - known_enzymes
-    
-    #first case: First digest on uncut plasmid
-    if not known_enzymes and len(current_map) == 1:
-        print(f"First digest: {new_enzymes}, fragments: {new_fragments}")
-        
-        #for a single enzyme on circular plasmid, all fragments connect via that enzyme
-        #try all rotations of the fragments
-        for rotation in range(len(new_fragments)):
-            rotated = new_fragments[rotation:] + new_fragments[:rotation]
+    # These are the actual fragment objects on the map grouped by length
+    map_groups = identify_map_groups_ordered(current_map, simulated_lengths, shared_enzymes)
+    print(map_groups)
+
+    if not new_enzymes:
+        # If any possibility represents a perfect 1-to-1 match (no sub-cutting)
+        if any(all(len(bucket) == 1 for bucket in division) for division in possibilities):
+            print(f"Result: [V] Verification successful for {enzymes_in_digest}")
+            return recurse(current_map, remaining_digests[1:], full_chain)
+        else:
+            print(f"Result: [X] Verification failed. No new enzymes, but map doesn't match.")
+            return None
+
+    # Only run this if we have map_groups and new_enzymes to place
+    if map_groups is None: return None
+
+    for division in possibilities:
+        # Calculate cuts: if 1 bucket is split into 3 sub-fragments, we need 2 internal cuts
+        num_cuts = sum(len(subgroup) - 1 for subgroup in division)
+        if map_groups[0][0].startEnzyme is None:
+            num_cuts = len(division[0])
+
+        for enzyme_setup in product(new_enzymes, repeat=num_cuts):
+            trial_map = copy.deepcopy(current_map)
             
-            new_map = []
-            position = 0
-            enzyme = new_enzymes[0]
+            # Re-locate objects in the new deepcopy memory
+            target_positions = [[f.startPosition for f in g] for g in map_groups]
+            frags_in_trial = []
+            for pos_list in target_positions:
+                frags_in_trial.append([f for f in trial_map if f.startPosition in pos_list])
+
+            # Zip the math (division) with the objects (frags_in_trial)
+            updated_map = insert_cuts_multi_group(trial_map, division, frags_in_trial, enzyme_setup)
             
-            for i, length in enumerate(rotated):
-                #all cuts by the same enzyme in circular plasmid
-                new_map.append(f(enzyme, enzyme, length, position))
-                position += length
-            
-            if check_validity(new_map, chain[:1]):
-                result = recurse(new_map, remaining_digests[1:], chain)
-                if result is not None:
-                    return result
-        
-        return None
-    
-    if not new_enzyme_set:
-        if check_validity(current_map, [current_digest]):
-            return recurse(current_map, remaining_digests[1:], chain)
-        return None
-    
-    new_enzyme = list(new_enzyme_set)[0]
-    simulated_frags = simulate_digest(current_map, known_enzymes)
-    mismatched_old, mismatched_new = find_mismatches(simulated_frags, new_fragments)
-    
-    if not mismatched_old:
-        if check_validity(current_map, chain[:chain.index(current_digest) + 1]):
-            return recurse(current_map, remaining_digests[1:], chain)
-        return None
-    
-    possible_divisions = coverage_possibilities(mismatched_new, mismatched_old)
-    
-    for division in possible_divisions:
-        new_map = insert_cuts(current_map, division, mismatched_old, new_enzyme, known_enzymes)
-        
-        if new_map and check_validity(new_map, chain[:chain.index(current_digest) + 1]):
-            result = recurse(new_map, remaining_digests[1:], chain)
-            if result is not None:
-                return result
-    
+            if updated_map:
+                result = recurse(updated_map, remaining_digests[1:], full_chain)
+                if result: return result
     return None
 
-def visualize_map(current_map):
-    total_length = sum(frag.length for frag in current_map)
-    print(f"Total length: {total_length}; Number of fragments: {len(current_map)}")
-    print()
-    
-    for i, frag in enumerate(current_map):
-        start_label = frag.startEnzyme if frag.startEnzyme else "START"
-        end_label = frag.endEnzyme if frag.endEnzyme else "END"
-        print(f"  Fragment {i}: {start_label} --[{frag.length}bp]--> {end_label}  (pos: {frag.startPosition})")
-    repr_str = ""
-    #show linear representation
-    for frag in current_map:
-        start = frag.startEnzyme if frag.startEnzyme else "**"
-        repr_str += f"{start}={frag.length}="
-    end = current_map[-1].endEnzyme if current_map[-1].endEnzyme else "**"
-    repr_str += end
-    print(f"  {repr_str}")
-    print(f"{'='*60}\n")
-
+# Test data
 A = (["EcoRI"], [6000, 4000])
 B = (["BamHI"], [5000, 3000, 2000])
 C = (["HindIII"], [7000, 3000])
-D = (["EcoRI", "BamHI"], [3000,2000,2000,1000,2000])
-E = (["BamHI", "HindIII", "PstI"], [3000,2000,2000,1500,1500])
-F = (["EcoRI", "HindIII", "XhoI"], [3000,2500,2000,1500,1000])
+D = (["EcoRI", "BamHI"], [3000, 2000, 2000, 1000, 2000])
+E = (["BamHI", "HindIII", "PstI"], [3000, 2000, 2000, 1500, 1500])
+F = (["EcoRI", "HindIII", "XhoI"], [3000, 2500, 2000, 1500, 1000])
 #test = [A, B, C, D, E, F]
-test = [A, B, D]
+
+print(coverage_possibilities(E[1], B[1]))
 
 chain = build_chain(test)
-print(chain)
+print("Chain order:", chain)
+print()
 mapping = build_canonical(chain)
+print()
 if mapping:
+    print("FINAL MAPPING:")
     for frag in mapping:
-        print(frag)
+        print(f"  {frag}")
 else:
     print("Something either went wrong OR your digests are invalid.")
 
