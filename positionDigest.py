@@ -1,14 +1,85 @@
 import copy
 from collections import Counter
 from itertools import product
+import matplotlib.pyplot as plt
+import numpy as np
+
 
 tol = 0
 all_solutions = False
 solutions = []
 
-'''
-Infinite randomized test cases implemented tomorrow.
-'''
+import matplotlib.pyplot as plt
+import numpy as np
+
+def draw_plasmid(mapping, chain, current_digest_idx):
+    plt.clf()
+    ax = plt.subplot(111, projection='polar')
+    ax.set_theta_direction(-1)  # Clockwise
+    ax.set_theta_offset(np.pi/2) # 0 at top
+    
+    # Constants for layout
+    VIEW_LIMIT = 50      
+    INNER_RADIUS = 25    # Pushes rings toward the edge
+    RING_WIDTH = 2     # Thinner rings
+    GAP = 1           # Spacing between rings
+    
+    # 1. Draw the "Tracks" for each digest in the chain
+    for d_idx, (enzymes, frags) in enumerate(chain):
+        r_base = INNER_RADIUS + d_idx * (RING_WIDTH + GAP)
+        active_enz = set(enzymes)
+        
+        if active_enz.issubset(mapping.known_enzymes):
+            sim_lengths = mapping.simulate_digest(active_enz)
+            active_sites = mapping.get_active_sites_sorted(active_enz)
+            
+            # --- UPDATED COLORMAP SYNTAX ---
+            cmap = plt.get_cmap('tab10')
+            color = cmap(d_idx % 10)
+            alpha = 1.0 if d_idx == current_digest_idx else 0.2
+            
+            # Draw the Arcs
+            for i, length in enumerate(sim_lengths):
+                start_pos = active_sites[i][0]
+                start_rad = (start_pos / mapping.length) * 2 * np.pi
+                width_rad = (length / mapping.length) * 2 * np.pi
+                
+                ax.bar(start_rad, RING_WIDTH, width=width_rad, bottom=r_base, 
+                       color=color, alpha=alpha, align='edge', edgecolor='none')
+
+            # --- CUT SITE MARKERS ---
+            for pos, enz_set in active_sites:
+                theta = (pos / mapping.length) * 2 * np.pi
+                # Draw a white line across the ring to show the cut
+                # We extend it slightly (+0.02) to create a "notch" effect
+                ax.vlines(theta, r_base - 0.02, r_base + RING_WIDTH + 0.02, 
+                          color='white' if alpha == 1.0 else 'black', 
+                          lw=1.2, zorder=10)
+
+    # 2. Draw Site Labels
+    outermost_r = INNER_RADIUS + len(chain) * (RING_WIDTH + GAP) + 2
+    for pos, enzymes in mapping.sites.items():
+        theta = (pos / mapping.length) * 2 * np.pi
+        label = "/".join(sorted(enzymes))
+        
+        # Vertical reference line
+        ax.plot([theta, theta], [INNER_RADIUS - 1, outermost_r - 1], 
+                color='black', lw=0.5, linestyle=':', alpha=0.3)
+        
+        ax.text(theta, outermost_r, f"{label}\n{int(pos)}", 
+                ha='center', va='center', fontsize=7, 
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=0.5))
+
+    # Scaling and Styling
+    ax.set_ylim(0, VIEW_LIMIT) 
+    ax.set_rticks([])
+    ax.set_xticks([])
+    ax.grid(False)
+    ax.spines['polar'].set_visible(False)
+    
+    plt.title(f"Plasmid Map: {int(mapping.length)} bp\nActive: {chain[current_digest_idx][0]}", pad=25)
+    plt.draw()
+    plt.pause(0.05)
 
 class Mapping:
     def __init__(self, length = 0):
@@ -224,34 +295,54 @@ def find_length(chain):
         Some of these functions were just correct so I copied them from my previous file, and they'll come in handy if I ever want to try ml.
     '''
 
-def build_canonical(chain):
+def build_seed(sites, length):
+    """
+    sites: List of tuples like [ (["HindIII"], 500), (["BamHI", "HindIII"], 4000) ]
+    """
+    initial = Mapping(length=length)
+    for enzymes, position in sites:
+        # Utilizing your existing add_site logic which handles sets/strings
+        initial.add_site(enzymes, position)
+    return initial
+
+def build_canonical(chain, seed_sites=None):
     global solutions
     solutions = []
+    # Handle mutable default argument
+    if seed_sites is None:
+        seed_sites = []
     length = find_length(chain)
     if not length:
         print("Bad digests: Total lengths are inconsistent.")
         return None
-    #initialize the plasmid as one continuous 'fragment' with no enzymes yet
-    #position starts at 0, length is the total plasmid size
-    initial_map = Mapping(length=length)
-    result_map = recurse(initial_map, chain)
+    # 1. Create the map with ground-truth sites
+    initial_map = build_seed(seed_sites, length)
+    # 2. Run the recursion
+    # The solver will now see initial_map.known_enzymes populated!
+    recurse(initial_map, chain, chain, 0)
+    # 3. Filter for unique solutions
     unique_maps = []
     seen_signatures = set()
     for mapping in solutions:
-        sig = mapping.get_sig() # Ensure this method name matches
+        sig = mapping.get_sig()
         if sig not in seen_signatures:
             unique_maps.append(mapping)
             seen_signatures.add(sig)
     return unique_maps
 
-def recurse(current_mapping, remaining_digests):
+def recurse(current_mapping, remaining_digests, full_chain, current_depth=0):
     global solutions
     
-    # BASE CASE
+    # VISUALIZATION:
+    # Use min() to prevent IndexError on the final success frame
+    viz_idx = min(current_depth, len(full_chain) - 1)
+    draw_plasmid(current_mapping, full_chain, viz_idx)
+    
+    # BASE CASE: All digests placed
     if not remaining_digests:
         solutions.append(current_mapping)
-        # We return True to indicate a path was found, but the parent
-        # loop will keep running to find OTHER paths.
+        # Final redraw to show the completed map
+        draw_plasmid(current_mapping, full_chain, viz_idx)
         return True 
 
     enzymes_in_digest, actual_frags = remaining_digests[0]
@@ -270,10 +361,11 @@ def recurse(current_mapping, remaining_digests):
     # VERIFY/EXPLORE
     for division in possibilities:
         if not new_enzymes:
+            # Check if current map satisfies this digest without adding new sites
             if all(len(subgroup) == 1 for subgroup in division):
-                if recurse(current_mapping, remaining_digests[1:]):
+                if recurse(current_mapping, remaining_digests[1:], full_chain, current_depth + 1):
                     found_at_least_one = True
-            continue # Try next division
+            continue 
 
         num_internal_cuts = sum(len(subgroup) - 1 for subgroup in division)
         if not shared_enzymes:
@@ -294,11 +386,9 @@ def recurse(current_mapping, remaining_digests):
             trial_map.add_sites(new_sites_to_add)
 
             if Counter(trial_map.simulate_digest(enzymes_in_digest)) == Counter(actual_frags):
-                # IMPORTANT: We do NOT return immediately. 
-                # We record that we found one and let the loop continue.
-                if recurse(trial_map, remaining_digests[1:]):
+                if recurse(trial_map, remaining_digests[1:], full_chain, current_depth + 1):
                     found_at_least_one = True
-                    if not all_solutions: # If user only wants the first one found
+                    if not all_solutions:
                         return True
 
     return found_at_least_one
@@ -314,12 +404,24 @@ if __name__=="__main__":
     D = (["EcoRI", "BamHI"], [3000, 2000, 2000, 1000, 2000])
     E = (["BamHI", "HindIII", "PstI"], [3000, 2000, 2000, 1500, 1500])
     F = (["EcoRI", "HindIII", "XhoI"], [3000, 2500, 2000, 1500, 1000])
+
+    G = (["AluI"], [2200, 4800, 8000])
+    H = (["PvuI"], [5900, 9100])
+    I = (["HindIII"], [3000, 12000])
+    J = (["SacI"], [2000, 4000, 9000])
+    K = (["PvuI", "BamHI"], [1100, 5900, 8000])
+    L = (["XmnI"], [4800, 10200])
+    M = (["SacI", "XmnI"], [300, 500, 4000, 8700])
+    N = (["AluI", "BamHI"], [1800, 2200, 3000, 8000])
+    O = (["HindIII", "AluI"], [1000, 1200, 2000, 4800, 6000])
+    P = (["BamHI"], [15000])
     test = [A, B, C, D, E, F]
+    #test = [G, H, I, J, K, L, M, N, O, P]
 
     #print(coverage_possibilities(E[1], B[1]))
-
+    seeds = []
     chain = build_chain(test)
     print("Chain order:", chain)
     print()
-    maps = build_canonical(chain)
+    maps = build_canonical(chain, seeds)
     display_mappings(maps)
