@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bio-Mapper Engine</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; display: flex; margin: 0; background: #f4f7f9; height: 100vh; overflow: hidden; }
+        #sidebar { width: 340px; background: white; padding: 25px; border-right: 1px solid #dfe6e9; overflow-y: auto; }
+        #main { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #history { width: 280px; background: #fff; border-left: 1px solid #dfe6e9; padding: 20px; overflow-y: auto; }
+        
+        .input-group { background: #f8f9fa; padding: 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e9ecef; }
+        input { width: 90%; padding: 8px; margin-top: 5px; border: 1px solid #ced4da; border-radius: 4px; }
+        
+        .control-panel { margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 8px; }
+        button { cursor: pointer; border-radius: 6px; border: none; font-weight: bold; width: 100%; transition: 0.2s; }
+        .btn-primary { background: #0984e3; color: white; padding: 12px; margin-bottom: 10px; }
+        .btn-next { background: #00b894; color: white; padding: 15px 40px; font-size: 1.1em; width: auto; display: none; margin-top: 20px; }
+
+        .backbone { fill: none; stroke: #dfe6e9; stroke-width: 14; }
+        .label { font-size: 12px; font-weight: bold; font-family: 'Courier New', monospace; }
+        
+        #status { font-weight: bold; color: #2d3436; margin-bottom: 15px; text-align: center; font-size: 1.1em; }
+        .sol-card { padding: 12px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 10px; cursor: pointer; transition: 0.2s; font-size: 0.9em; }
+        .sol-card:hover { border-color: #00b894; background: #f0fff4; }
+        .sol-card.active { background: #e6fffa; border-color: #38b2ac; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h3>Input Digests</h3>
+    <div id="digest-inputs">
+        <div class="input-group">
+            <input type="text" class="enz" placeholder="Enzymes (EcoRI)" value="EcoRI">
+            <input type="text" class="frags" placeholder="Fragments (5000 5000)" value="5000 5000">
+        </div>
+    </div>
+    <button style="background:#eee; padding:8px; margin-bottom:10px" onclick="addInput()">+ Add Digest</button>
+    <button class="btn-primary" onclick="initSolver()">Run Logic Engine</button>
+
+    <div class="control-panel">
+        <label style="display:block; margin-bottom:8px;">
+            <input type="checkbox" id="autoToggle" onchange="toggleAuto()"> <b>Auto-Progression</b>
+        </label>
+        <label>Delay (sec): 
+            <input type="number" id="delay" value="0.8" step="0.1" min="0.1" style="width:50px; padding:2px;">
+        </label>
+    </div>
+</div>
+
+<div id="main">
+    <div id="status">Ready to map...</div>
+    <svg id="canvas" width="600" height="600" viewBox="0 0 800 800">
+        <circle cx="400" cy="400" r="260" class="backbone" />
+        <g id="draw-layer"></g>
+    </svg>
+    <button id="nextBtn" class="btn-next" onclick="step()">Next State &rarr;</button>
+</div>
+
+<div id="history">
+    <h3>Solutions</h3>
+    <div id="sol-list"></div>
+</div>
+
+<script>
+    let timer = null;
+    let knownSolutions = new Set();
+
+    function addInput() {
+        const div = document.createElement('div');
+        div.className = 'input-group';
+        div.innerHTML = `<input type="text" class="enz" placeholder="Enzymes"><input type="text" class="frags" placeholder="Fragments">`;
+        document.getElementById('digest-inputs').appendChild(div);
+    }
+
+    async function initSolver() {
+        knownSolutions.clear();
+        document.getElementById('sol-list').innerHTML = '';
+        const digests = Array.from(document.querySelectorAll('.input-group')).map(g => ({
+            enzymes: g.querySelector('.enz').value,
+            fragments: g.querySelector('.frags').value
+        }));
+        const res = await fetch('/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({digests})
+        });
+        render(await res.json());
+        document.getElementById('nextBtn').style.display = 'block';
+        if(document.getElementById('autoToggle').checked) triggerAuto();
+    }
+
+    async function step() {
+        const res = await fetch('/next');
+        const data = await res.json();
+        render(data);
+        if (data.done) {
+            document.getElementById('autoToggle').checked = false;
+        } else if (document.getElementById('autoToggle').checked) {
+            triggerAuto();
+        }
+    }
+
+    function toggleAuto() {
+        if (document.getElementById('autoToggle').checked) step();
+        else clearTimeout(timer);
+    }
+
+    function triggerAuto() {
+        clearTimeout(timer);
+        const ms = parseFloat(document.getElementById('delay').value) * 1000;
+        timer = setTimeout(step, ms);
+    }
+
+    function render(data) {
+        if (!data || data.done) {
+            document.getElementById('status').innerText = "All branches explored.";
+            return;
+        }
+        document.getElementById('status').innerText = data.status;
+        
+        if (data.is_solution) {
+            const sig = JSON.stringify(data.sites_data.map(s => s.pos).sort());
+            if (!knownSolutions.has(sig)) {
+                knownSolutions.add(sig);
+                addSolutionCard(data);
+            }
+        }
+
+        const layer = document.getElementById('draw-layer');
+        layer.innerHTML = '';
+        const CX = 400, CY = 400, R = 260;
+
+        data.sites_data.forEach(s => {
+            const angle = (s.pos / data.total_length) * 2 * Math.PI - Math.PI / 2;
+            const x1 = CX + Math.cos(angle) * (R - 20), y1 = CY + Math.sin(angle) * (R - 20);
+            const x2 = CX + Math.cos(angle) * (R + 20), y2 = CY + Math.sin(angle) * (R + 20);
+
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+            line.setAttribute("stroke", s.color); line.setAttribute("stroke-width", "5");
+            layer.appendChild(line);
+
+            const tx = CX + Math.cos(angle) * (R + 65), ty = CY + Math.sin(angle) * (R + 65);
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute("x", tx); text.setAttribute("y", ty);
+            text.setAttribute("fill", s.color); text.setAttribute("class", "label");
+            text.setAttribute("text-anchor", "middle"); text.setAttribute("dominant-baseline", "middle");
+            text.textContent = `${s.enz} (${Math.round(s.pos)})`;
+            layer.appendChild(text);
+        });
+    }
+
+    function addSolutionCard(data) {
+        const list = document.getElementById('sol-list');
+        const card = document.createElement('div');
+        card.className = 'sol-card';
+        card.innerText = `Solution found at Step ${document.getElementById('status').innerText.split(' ')[1]}`;
+        card.onclick = () => {
+            document.querySelectorAll('.sol-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            render(data);
+        };
+        list.prepend(card);
+    }
+</script>
+</body>
+</html>
