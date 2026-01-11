@@ -86,6 +86,14 @@ class Mapping:
         self.sites = {}
         self.length = length
         self.known_enzymes = set()
+        
+    def rotate(self, offset):
+        new_sites = {}
+        for pos, enz_set in self.sites.items():
+            # Move the site and wrap around the length
+            new_pos = round((pos + offset) % self.length, 4)
+            new_sites[new_pos] = enz_set
+        self.sites = new_sites
 
     def add_site(self, enzymes, position):
         #now handles both a single string "EcoRI" or a set {"EcoRI", "BamHI"}!
@@ -308,26 +316,72 @@ def build_seed(sites, length):
 def build_canonical(chain, seed_sites=None):
     global solutions
     solutions = []
-    # Handle mutable default argument
-    if seed_sites is None:
-        seed_sites = []
+    
     length = find_length(chain)
     if not length:
         print("Bad digests: Total lengths are inconsistent.")
         return None
-    # 1. Create the map with ground-truth sites
-    initial_map = build_seed(seed_sites, length)
-    # 2. Run the recursion
-    # The solver will now see initial_map.known_enzymes populated!
+
+    initial_map = Mapping(length=length)
     recurse(initial_map, chain, chain, 0)
-    # 3. Filter for unique solutions
+    
     unique_maps = []
     seen_signatures = set()
+    
     for mapping in solutions:
+        final_valid_map = None
+        
+        if seed_sites:
+            # We need to test the map and its mirror image
+            # because gel data doesn't tell us 'direction'
+            for is_mirrored in [False, True]:
+                test_map = copy.deepcopy(mapping)
+                if is_mirrored:
+                    # Mirror: new_pos = (length - old_pos) % length
+                    test_map.sites = {round((length - p) % length, 4): e 
+                                      for p, e in test_map.sites.items()}
+                
+                # Anchor: Try to align the first seed site
+                anchor_enzs, anchor_pos = seed_sites[0]
+                if isinstance(anchor_enzs, str): anchor_enzs = {anchor_enzs}
+                
+                # Find all positions of the anchor enzyme in our generated map
+                possible_starts = [p for p, e in test_map.sites.items() if anchor_enzs.issubset(e)]
+                
+                for current_start in possible_starts:
+                    # Calculate the rotation shift needed
+                    shift = (anchor_pos - current_start) % length
+                    
+                    # Apply shift to all sites
+                    rotated_sites = {round((p + shift) % length, 4): e 
+                                     for p, e in test_map.sites.items()}
+                    
+                    # Check if ALL other seed sites match this rotation
+                    all_match = True
+                    for s_enzs, s_pos in seed_sites:
+                        if isinstance(s_enzs, str): s_enzs = {s_enzs}
+                        
+                        if not any(abs(p - s_pos) <= 1.5 and s_enzs.issubset(e) 
+                                   for p, e in rotated_sites.items()):
+                            all_match = False
+                            break
+                    
+                    if all_match:
+                        test_map.sites = rotated_sites
+                        final_valid_map = test_map
+                        break
+                if final_valid_map: break
+            
+            if not final_valid_map:
+                continue # No rotation or mirror of this solution matches seeds
+            mapping = final_valid_map # Use the aligned version
+        
+        # Finally, check signature to ensure uniqueness
         sig = mapping.get_sig()
         if sig not in seen_signatures:
             unique_maps.append(mapping)
             seen_signatures.add(sig)
+            
     return unique_maps
 
 def recurse(current_mapping, remaining_digests, full_chain, current_depth=0):
@@ -418,7 +472,6 @@ if __name__=="__main__":
     test = [A, B, C, D, E, F]
     #test = [G, H, I, J, K, L, M, N, O, P]
 
-    #print(coverage_possibilities(E[1], B[1]))
     seeds = []
     chain = build_chain(test)
     print("Chain order:", chain)
