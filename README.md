@@ -1,6 +1,6 @@
 Link: https://suzueki.duckdns.org/nDigest/
 
-This project aims to provide a quick computerized method to find possible restriction mappings from a list of digests. 
+This project aims to provide a quick computerized method to find possible restriction mappings from a list of complete digests. 
 As the name suggests, it works with any number of digests, and can find a solution for n enzymes, given n+1 digests that are well-conditioned -
 (irl case, but someone using this for an assignment or test question may find that the inputs are especially duplicitous at times)
 In the ill-conditioned case, it will generate a family of possible solutions - as mathematically required. 
@@ -10,4 +10,4 @@ Hence, a teeny-tiny bit is html and it's wrapped with Flask.
 Another 6 hours was spent installing Ubuntu and the associated networking stack. 
 Now this accursed program currently lives at https://suzueki.duckdns.org/nDigest/, hosted from a laptop in my furnace room with a broken trackpad and a cracked screen.
 
-A writeup will be added when my eyes feel less dry.
+A writeup, better UI, and possibly functionality for partial digests, will be added when my eyes feel less dry.
