@@ -1,4 +1,5 @@
 import uuid
+import re
 import copy
 import hashlib
 from flask import Flask, render_template, request, jsonify
@@ -194,9 +195,17 @@ def start():
     data = request.json
     # Generate a unique ID for this specific browser session
     sid = str(uuid.uuid4())
-    
-    raw_digests = [(d['enzymes'].split(), [float(f) for f in d['fragments'].split()])
-                   for d in data['digests'] if d['enzymes'] and d['fragments']]
+    raw_digests = []
+    for d in data['digests']:
+        if d['enzymes'] and d['fragments']:
+            # Split enzymes by any non-word character (/, space, comma, etc.)
+            # filter(None, ...) removes any empty strings caused by trailing delimiters
+            enz_list = list(filter(None, re.split(r'[^a-zA-Z0-9]+', d['enzymes'])))
+            
+            # Keep fragment splitting as is or apply similar logic
+            frag_list = [float(f) for f in re.split(r'[^0-9.]+', d['fragments']) if f]
+            
+            raw_digests.append((enz_list, frag_list))
     
     seed_data = data.get('seeds', [])
     seeds = [(s['enzymes'], float(s['pos'])) for s in seed_data if s.get('enzymes') and s.get('pos')]
