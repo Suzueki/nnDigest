@@ -52,6 +52,28 @@
 <body>
 
 <div id="sidebar">
+    <div class="section-title">Master Console</div>
+    <div class="input-group" style="background: #2d3436; color: #fff;">
+        <textarea id="master-json" placeholder='Paste JSON here...' 
+                style="width: 95%; height: 100px; font-family: monospace; font-size: 0.8em; background: #1e272e; color: #00d8d6; border: none; border-radius: 4px; padding: 5px;"></textarea>
+        <button class="btn-primary" onclick="loadMasterJSON()" style="margin-top: 8px; background: #00d8d6; color: #2d3436;">Load Config</button>
+        
+        <details style="font-size: 0.75em; margin-top: 10px; cursor: pointer;">
+            <summary>Schema Guide & Example</summary>
+            <div style="background: #3d4648; padding: 8px; margin-top: 5px; border-radius: 4px;">
+                <p><b>digests:</b> Key = Enzyme(s), Value = Array of fragments.</p>
+                <p><b>seeds:</b> Key = Enzyme, Value = BP Position (float).</p>
+                <pre style="color: #feca57; font-size: 0.85em;">
+    {
+    "digests": {
+        "EcoRI": [5000, 5000],
+        "BamHI/HindIII": [1000, 9000]
+    },
+    "seeds": { "PstI": 150 }
+    }</pre>
+            </div>
+        </details>
+    </div>
     <div class="section-title">
         Experimental Digests
         <button class="btn-add" onclick="addInput('digest-inputs')">+ Add</button>
@@ -119,6 +141,48 @@
         }
     }
 
+    function loadMasterJSON() {
+        try {
+            const raw = document.getElementById('master-json').value;
+            const data = JSON.parse(raw);
+
+            // Clear existing UI rows
+            document.getElementById('digest-inputs').innerHTML = '';
+            document.getElementById('seed-inputs').innerHTML = '';
+
+            // Load Digests into the DOM
+            if (data.digests) {
+                Object.entries(data.digests).forEach(([enz, frags]) => {
+                    const div = document.createElement('div');
+                    div.className = 'input-group';
+                    div.innerHTML = `
+                        <input type="text" class="enz" value="${enz}">
+                        <input type="text" class="frags" value="${Array.isArray(frags) ? frags.join(' ') : frags}">
+                    `;
+                    document.getElementById('digest-inputs').appendChild(div);
+                });
+            }
+
+            // Load Seeds into the DOM
+            if (data.seeds) {
+                document.getElementById('seed-container').style.display = 'block';
+                Object.entries(data.seeds).forEach(([enz, pos]) => {
+                    const div = document.createElement('div');
+                    div.className = 'input-group seed-group';
+                    div.innerHTML = `
+                        <input type="text" class="seed-enz" value="${enz}">
+                        <input type="number" class="seed-pos" value="${pos}">
+                    `;
+                    document.getElementById('seed-inputs').appendChild(div);
+                });
+            }
+            
+            document.getElementById('status').innerText = "Configuration applied.";
+        } catch (e) {
+            alert("JSON Error: " + e.message);
+        }
+    }
+
     function addInput(parentId) {
         const div = document.createElement('div');
         div.className = 'input-group';
@@ -145,7 +209,7 @@
         document.getElementById('status').innerText = "Ready to map...";
         document.getElementById('nextBtn').style.display = 'none';
         addInput('digest-inputs');
-        await fetch('/clear', { method: 'POST' });
+        await fetch('clear', { method: 'POST' });
     }
 
     async function initSolver() {
@@ -162,7 +226,7 @@
             pos: parseFloat(g.querySelector('.seed-pos').value)
         })).filter(s => s.enzymes && !isNaN(s.pos));
 
-        const res = await fetch('/start', {
+        const res = await fetch('start', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ digests, seeds: activeSeeds })
@@ -174,7 +238,7 @@
     }
 
     async function step() {
-        const res = await fetch('/next');
+        const res = await fetch('next');
         const data = await res.json();
         render(data);
         if (data.done) {
