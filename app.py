@@ -5,6 +5,9 @@ import hashlib
 from flask import Flask, render_template, request, jsonify
 from collections import Counter
 from itertools import product, permutations
+import time
+import threading
+from threading import Lock
 
 app = Flask(__name__)
 
@@ -184,27 +187,41 @@ def solve_generator(current_mapping, remaining_digests, full_chain, depth=0, see
 # --- ROUTES ---
 
 active_solvers = {}
+solve_lock = Lock()
 
+def cleanup_old_sessions():
+    """Background task to remove inactive generators from memory"""
+    while True:
+        time.sleep(600)  # Check every 10 minutes
+        now = time.time()
+        with solve_lock:
+            # Check if current time minus last access time is > 1 hour
+            to_delete = [sid for sid, data in active_solvers.items() if now - data[1] > 3600]
+            for sid in to_delete:
+                del active_solvers[sid]
+
+threading.Thread(target=cleanup_old_sessions, daemon=True).start()
 
 @app.route('/')
 def index(): 
     return render_template('index.html')
 
+@app.route('/status')
+def status():
+    with solve_lock:
+        return jsonify({
+            "active_sessions": len(active_solvers)
+        })
+
 @app.route('/start', methods=['POST'])
 def start():
     data = request.json
-    # Generate a unique ID for this specific browser session
     sid = str(uuid.uuid4())
     raw_digests = []
     for d in data['digests']:
         if d['enzymes'] and d['fragments']:
-            # Split enzymes by any non-word character (/, space, comma, etc.)
-            # filter(None, ...) removes any empty strings caused by trailing delimiters
             enz_list = list(filter(None, re.split(r'[^a-zA-Z0-9]+', d['enzymes'])))
-            
-            # Keep fragment splitting as is or apply similar logic
             frag_list = [float(f) for f in re.split(r'[^0-9.]+', d['fragments']) if f]
-            
             raw_digests.append((enz_list, frag_list))
     
     seed_data = data.get('seeds', [])
@@ -213,21 +230,36 @@ def start():
     chain = build_chain(raw_digests)
     length = sum(raw_digests[0][1])
     
-    active_solvers[sid] = solve_generator(Mapping(length=length), chain, chain, 0, seeds)
+    # Logic remains identical, just wrapped in a lock for thread safety
+    new_gen = solve_generator(Mapping(length=length), chain, chain, 0, seeds)
     
-    response = jsonify(next(active_solvers[sid]))
-    response.set_cookie('session_id', sid) # Store ID in user's browser
+    with solve_lock:
+        active_solvers[sid] = (new_gen, time.time())
+    
+    response = jsonify(next(new_gen))
+    response.set_cookie('session_id', sid) 
     return response
 
 @app.route('/next')
 def next_step():
     sid = request.cookies.get('session_id')
-    if not sid or sid not in active_solvers:
-        return jsonify({"status": "Session expired. Restarting...", "done": True})
+    
+    # Check session inside the lock
+    with solve_lock:
+        if not sid or sid not in active_solvers:
+            return jsonify({"status": "Session expired. Restarting...", "done": True})
+        
+        # Pull the generator and update timestamp
+        gen, _ = active_solvers[sid]
+        active_solvers[sid] = (gen, time.time())
     
     try: 
-        return jsonify(next(active_solvers[sid]))
+        return jsonify(next(gen))
     except (StopIteration, KeyError): 
+        # Clean up once search is complete
+        with solve_lock:
+            if sid in active_solvers:
+                del active_solvers[sid]
         return jsonify({"status": "Search Complete.", "done": True})
 
 @app.route('/clear', methods=['POST'])
