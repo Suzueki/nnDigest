@@ -499,7 +499,7 @@ C = (["HindIII"], [7000, 3000])
 D = (["EcoRI", "BamHI"], [3000, 2000, 2000, 1000, 2000])
 E = (["BamHI", "HindIII", "PstI"], [3000, 2000, 2000, 1500, 1500])
 F = (["EcoRI", "HindIII", "XhoI"], [3000, 2500, 2000, 1500, 1000])
-#test = [A, B, C, D, E, F]
+test = [A, B, C, D, E, F]
 
 print(coverage_possibilities(E[1], B[1]))
 

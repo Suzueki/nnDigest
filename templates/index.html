@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>nDigest Restriction Mapping Algorithm</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; display: flex; margin: 0; background: #f4f7f9; height: 100vh; overflow: hidden; }
+        #sidebar { width: 340px; background: white; padding: 25px; border-right: 1px solid #dfe6e9; overflow-y: auto; padding-bottom: 60px; }
+        #main { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        #history { width: 280px; background: #fff; border-left: 1px solid #dfe6e9; padding: 20px; overflow-y: auto; }
+        
+        .section-title { font-size: 0.9em; font-weight: bold; color: #636e72; text-transform: uppercase; margin: 20px 0 10px 0; display: flex; justify-content: space-between; align-items: center;}
+        .input-group { background: #f8f9fa; padding: 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e9ecef; }
+        input { width: 90%; padding: 8px; margin-top: 5px; border: 1px solid #ced4da; border-radius: 4px; }
+        
+        .seed-group { background: #fff5f5; border: 1px solid #feb2b2; }
+
+        .control-panel { margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 8px; }
+        button { cursor: pointer; border-radius: 6px; border: none; font-weight: bold; width: 100%; transition: 0.2s; }
+        .btn-primary { background: #0984e3; color: white; padding: 12px; margin-bottom: 10px; }
+        .btn-next { background: #00b894; color: white; padding: 15px 40px; font-size: 1.1em; width: auto; display: none; margin-top: 0; margin-bottom: 60px; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.1);}
+        .btn-add { background: #eee; padding: 6px; font-size: 0.8em; width: auto; }
+        .btn-clear { background: #ff7675; color: white; padding: 8px; margin-top: 10px; }
+
+        .backbone-ring { fill: none; stroke: #dfe6e9; stroke-width: 20; }
+        .seed-ring { fill: none; stroke: #ff7675; stroke-width: 4; stroke-dasharray: 4; opacity: 0.3; }
+        .label { font-size: 11px; font-weight: bold; font-family: 'Courier New', monospace; }
+        .seed-label { font-size: 10px; fill: #d63031; font-style: italic; }
+        
+        #status { font-weight: bold; color: #2d3436; margin-bottom: 15px; text-align: center; font-size: 1.1em; }
+        #seed-container { display: none; margin-bottom: 20px; }
+        .sol-card { padding: 12px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 10px; cursor: pointer; transition: 0.2s; font-size: 0.9em; }
+        .sol-card:hover { border-color: #00b894; background: #f0fff4; }
+        .sol-card.active { background: #e6fffa; border-color: #38b2ac; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+
+        /* Footer Style */
+        .footer { 
+            position: absolute; 
+            bottom: 15px; 
+            right: 20px; 
+            font-size: 0.85em; 
+            color: #b2bec3; 
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: 0.2s;
+        }
+        .footer:hover { color: #0984e3; }
+        .footer svg { fill: currentColor; }
+
+        @keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 184, 148, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(0, 184, 148, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 184, 148, 0); }
+}
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div id="user-status" style="display: flex; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 0.85em; color: #636e72; background: #fff; padding: 8px 12px; border-radius: 20px; border: 1px solid #dfe6e9; width: fit-content;">
+        <span style="height: 8px; width: 8px; background-color: #00b894; border-radius: 50%; display: inline-block; animation: pulse 2s infinite;"></span>
+        <span id="user-count">0</span> Active Solvers
+    </div>
+
+    <div class="section-title">Enter a JSON to populate</div>
+    <div class="input-group" style="background: white; border: 1px solid #dfe6e9;">
+        <textarea id="master-json" placeholder='{"digests": {"EcoRI": [5000, 5000]}}' 
+            style="width: 100%; height: 80px; font-family: monospace; font-size: 0.85em; background: #fafafa; color: #2d3436; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; box-sizing: border-box; resize: vertical;"></textarea>
+        <button class="btn-primary" onclick="loadMasterJSON()" style="margin-top: 10px; background: #0984e3;">Load Config</button>
+        
+        <details style="font-size: 0.8em; margin-top: 8px; color: #636e72;">
+            <summary style="cursor: pointer;">View example JSON Schema</summary>
+            <pre style="background: #f8f9fa; padding: 8px; border-radius: 4px; color: #e83e8c; font-size: 0.85em; margin-top: 5px; white-space: pre-wrap;">{
+  "digests": {"EcoRI": [5000, 5000], "EcoRI/PstI": [3500, 1500, 4850, 150]},
+  "seeds": {"PstI": 150, "EcoRI/BamHI": 2000}
+}</pre>
+        </details>
+    </div>
+    <div class="section-title">
+        Add Complete Digests
+        <button class="btn-add" onclick="addInput('digest-inputs')">+ Add</button>
+    </div>
+    <div id="digest-inputs">
+        <div class="input-group">
+            <input type="text" class="enz" placeholder="Enzymes (EcoRI)" value="EcoRI">
+            <input type="text" class="frags" placeholder="Fragments (5000 5000)" value="5000 5000">
+        </div>
+    </div>
+
+    <div class="section-title">
+        Fixed Backbone Seeds
+        <button class="btn-add" onclick="toggleSeeds()">Enable Seeds</button>
+    </div>
+    <div id="seed-container">
+        <div id="seed-inputs"></div>
+        <button class="btn-add" style="width:100%" onclick="addSeedInput()">+ Add Known Site</button>
+    </div>
+
+    <button class="btn-primary" onclick="initSolver()" style="margin-top:20px">Run solver! Enable auto-progress if stuck.</button>
+    <button class="btn-clear" onclick="clearAll()">Clear All Data</button>
+
+    <div class="control-panel">
+        <label style="display:block; margin-bottom:8px;">
+            <input type="checkbox" id="autoToggle" onchange="toggleAuto()"> <b>Auto-Progression</b>
+        </label>
+        <label>Delay (sec): 
+            <input type="number" id="delay" value="0.8" step="0.1" min="0.1" style="width:50px; padding:2px;">
+        </label>
+    </div>
+</div>
+
+<div id="main">
+    <div id="status">Ready to map...</div>
+    <svg id="canvas" width="600" height="600" viewBox="0 0 800 800">
+        <circle cx="400" cy="400" r="260" class="backbone-ring" />
+        <circle cx="400" cy="400" r="230" class="seed-ring" />
+        <g id="seed-layer"></g> 
+        <g id="draw-layer"></g> 
+    </svg>
+    
+    <button id="nextBtn" class="btn-next" onclick="step()">Next State &rarr;</button>
+
+    <div style="position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center; align-items: center; gap: 30px; pointer-events: none;">
+        <div style="pointer-events: auto; display: flex; align-items: center; gap: 20px;">
+            <button onclick="window.location.href='/generator'" 
+                    style="background: #6c5ce7; color: white; border: none; padding: 12px 24px; border-radius: 30px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 15px rgba(108, 92, 231, 0.3); transition: 0.3s; font-size: 0.9em; animation: pulse 2s infinite;">
+                📝 I want questions, not answers! Practice Mode
+            </button>
+
+            <a href="https://github.com/Suzueki/nnDigest" target="_blank" class="footer" style="position: static;">
+                <svg height="20" width="20" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+                <span>GitHub</span>
+            </a>
+        </div>
+    </div>
+</div>
+
+<div id="history">
+    <h3>Solutions</h3>
+    <div id="sol-list"></div>
+</div>
+
+<script>
+    let timer = null;
+    let knownSolutions = new Set();
+    let activeSeeds = [];
+
+    function toggleSeeds() {
+        const container = document.getElementById('seed-container');
+        container.style.display = (container.style.display === 'block') ? 'none' : 'block';
+        if (container.style.display === 'block' && document.getElementById('seed-inputs').children.length === 0) {
+            addSeedInput();
+        }
+    }
+
+    function loadMasterJSON() {
+        try {
+            const raw = document.getElementById('master-json').value;
+            const data = JSON.parse(raw);
+
+            // Clear existing UI rows
+            document.getElementById('digest-inputs').innerHTML = '';
+            document.getElementById('seed-inputs').innerHTML = '';
+
+            // Load Digests into the DOM
+            if (data.digests) {
+                Object.entries(data.digests).forEach(([enz, frags]) => {
+                    const div = document.createElement('div');
+                    div.className = 'input-group';
+                    div.innerHTML = `
+                        <input type="text" class="enz" value="${enz}">
+                        <input type="text" class="frags" value="${Array.isArray(frags) ? frags.join(' ') : frags}">
+                    `;
+                    document.getElementById('digest-inputs').appendChild(div);
+                });
+            }
+
+            // Load Seeds into the DOM
+            if (data.seeds) {
+                document.getElementById('seed-container').style.display = 'block';
+                Object.entries(data.seeds).forEach(([enz, pos]) => {
+                    const div = document.createElement('div');
+                    div.className = 'input-group seed-group';
+                    div.innerHTML = `
+                        <input type="text" class="seed-enz" value="${enz}">
+                        <input type="number" class="seed-pos" value="${pos}">
+                    `;
+                    document.getElementById('seed-inputs').appendChild(div);
+                });
+            }
+            
+            document.getElementById('status').innerText = "Configuration applied.";
+        } catch (e) {
+            alert("JSON Error: " + e.message);
+        }
+    }
+
+    function addInput(parentId) {
+        const div = document.createElement('div');
+        div.className = 'input-group';
+        div.innerHTML = `<input type="text" class="enz" placeholder="Enzymes"><input type="text" class="frags" placeholder="Fragments">`;
+        document.getElementById(parentId).appendChild(div);
+    }
+
+    function addSeedInput() {
+        const div = document.createElement('div');
+        div.className = 'input-group seed-group';
+        div.innerHTML = `<input type="text" class="seed-enz" placeholder="Enzyme">
+                         <input type="number" class="seed-pos" placeholder="BP Position">`;
+        document.getElementById('seed-inputs').appendChild(div);
+    }
+
+    async function clearAll() {
+        clearTimeout(timer);
+        document.getElementById('autoToggle').checked = false;
+        document.getElementById('digest-inputs').innerHTML = '';
+        document.getElementById('seed-inputs').innerHTML = '';
+        document.getElementById('sol-list').innerHTML = '';
+        document.getElementById('draw-layer').innerHTML = '';
+        document.getElementById('seed-layer').innerHTML = '';
+        document.getElementById('status').innerText = "Ready to map...";
+        document.getElementById('nextBtn').style.display = 'none';
+        addInput('digest-inputs');
+        await fetch('clear', { method: 'POST' });
+    }
+
+    async function initSolver() {
+        knownSolutions.clear();
+        document.getElementById('sol-list').innerHTML = '';
+        
+        const digests = Array.from(document.querySelectorAll('#digest-inputs .input-group')).map(g => ({
+            enzymes: g.querySelector('.enz').value,
+            fragments: g.querySelector('.frags').value
+        }));
+
+        activeSeeds = Array.from(document.querySelectorAll('.seed-group')).map(g => ({
+            enzymes: g.querySelector('.seed-enz').value,
+            pos: parseFloat(g.querySelector('.seed-pos').value)
+        })).filter(s => s.enzymes && !isNaN(s.pos));
+
+        const res = await fetch('start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ digests, seeds: activeSeeds })
+        });
+        
+        render(await res.json());
+        document.getElementById('nextBtn').style.display = 'block';
+        if(document.getElementById('autoToggle').checked) triggerAuto();
+    }
+
+    async function step() {
+        const res = await fetch('next');
+        const data = await res.json();
+        render(data);
+        if (data.done) {
+            document.getElementById('autoToggle').checked = false;
+        } else if (document.getElementById('autoToggle').checked) {
+            triggerAuto();
+        }
+    }
+
+    function toggleAuto() {
+        if (document.getElementById('autoToggle').checked) step();
+        else clearTimeout(timer);
+    }
+
+    function triggerAuto() {
+        clearTimeout(timer);
+        const ms = parseFloat(document.getElementById('delay').value) * 1000;
+        timer = setTimeout(step, ms);
+    }
+
+    function render(data) {
+        if (!data || data.done) {
+            document.getElementById('status').innerText = "Search Complete.";
+            return;
+        }
+        document.getElementById('status').innerText = data.status;
+        
+        if (data.is_solution) {
+            const sig = JSON.stringify(data.sites_data.map(s => s.pos).sort());
+            if (!knownSolutions.has(sig)) {
+                knownSolutions.add(sig);
+                addSolutionCard(data);
+            }
+        }
+
+        const discoveryLayer = document.getElementById('draw-layer');
+        const seedLayer = document.getElementById('seed-layer');
+        discoveryLayer.innerHTML = '';
+        seedLayer.innerHTML = '';
+        
+        const CX = 400, CY = 400, R_MAIN = 260, R_SEED = 230;
+
+        activeSeeds.forEach(s => {
+            const angle = (s.pos / data.total_length) * 2 * Math.PI - Math.PI / 2;
+            drawSite(seedLayer, angle, R_SEED, s.enzymes, s.pos, "#ff7675", "seed-label", 10);
+        });
+
+        data.sites_data.forEach(s => {
+            const angle = (s.pos / data.total_length) * 2 * Math.PI - Math.PI / 2;
+            drawSite(discoveryLayer, angle, R_MAIN, s.enz, s.pos, s.color, "label", 20);
+        });
+    }
+
+    function drawSite(layer, angle, radius, enz, pos, color, labelClass, tickSize) {
+        const CX = 400, CY = 400;
+        const x1 = CX + Math.cos(angle) * (radius - tickSize), y1 = CY + Math.sin(angle) * (radius - tickSize);
+        const x2 = CX + Math.cos(angle) * (radius + tickSize), y2 = CY + Math.sin(angle) * (radius + tickSize);
+
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+        line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+        line.setAttribute("stroke", color); line.setAttribute("stroke-width", "3");
+        layer.appendChild(line);
+
+        const offset = (radius > 250) ? 65 : -45; 
+        const tx = CX + Math.cos(angle) * (radius + offset), ty = CY + Math.sin(angle) * (radius + offset);
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", tx); text.setAttribute("y", ty);
+        text.setAttribute("fill", color); text.setAttribute("class", labelClass);
+        text.setAttribute("text-anchor", "middle"); text.setAttribute("dominant-baseline", "middle");
+        text.textContent = `${enz} (${Math.round(pos)})`;
+        layer.appendChild(text);
+    }
+
+    function addSolutionCard(data) {
+        const list = document.getElementById('sol-list');
+        const card = document.createElement('div');
+        card.className = 'sol-card active';
+        card.innerText = `Solution found at Step ${document.getElementById('status').innerText.split(' ')[1] || 'Final'}`;
+        card.onclick = () => {
+            document.querySelectorAll('.sol-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            render(data);
+        };
+        list.prepend(card);
+
+    }
+
+    async function updateServerStatus()
+    {
+        try {
+            const res = await fetch('/nDigest/status');
+            const data = await res.json();
+            document.getElementById('user-count').innerText = data.active_sessions || 0;
+        } catch (e) {
+            console.log("Status check failed (server might be restarting)");
+        }
+    }
+
+    updateServerStatus();
+    setInterval(updateServerStatus, 20000);
+
+    window.onload = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const configParam = urlParams.get('config');
+    
+    if (configParam) {
+        try {
+            const decoded = decodeURIComponent(configParam);
+            document.getElementById('master-json').value = decoded;
+            loadMasterJSON(); //existing function to populate fields
+            initSolver(); 
+        } catch (e) {
+            console.error("Failed to load config from URL", e);
+        }
+    }
+};
+</script>
+</body>
+</html>

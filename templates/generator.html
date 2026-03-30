@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>nDigest | Problem Generator</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f4f7f9; display: flex; flex-direction: column; align-items: center; padding: 50px; }
+        .card { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 100%; max-width: 650px; border: 1px solid #d1d8e0; }
+        h2 { margin-top:0; color:#2d3436; text-align: center; }
+        p.subtitle { color:#7f8c8d; font-size: 0.9em; text-align: center; margin-bottom: 25px; }
+        
+        .setup-bar { background:#f8f9fa; border-radius:10px; padding:15px; margin-bottom:20px; display:flex; gap:20px; align-items:flex-end; }
+        .input-box { flex: 1; }
+        .input-box label { font-size:0.75em; font-weight:bold; color:#636e72; display: block; margin-bottom: 5px; text-transform: uppercase; }
+        input[type="number"] { width:100%; padding:8px; border:1px solid #ced4da; border-radius:4px; box-sizing: border-box; }
+        
+        #question-display { background:white; border:1px solid #e9ecef; padding:20px; border-radius:8px; font-family:'Courier New', monospace; font-size:0.95em; max-height:400px; overflow-y:auto; line-height:1.6; }
+        
+        .btn { cursor: pointer; border-radius: 8px; border: none; font-weight: bold; transition: 0.2s; padding: 12px; }
+        .btn-gen { background: #0984e3; color: white; height: 40px; width: 100px; }
+        .btn-solve { background: #00b894; color: white; flex: 2; font-size: 1em; }
+        .btn-print { background: #636e72; color: white; flex: 1; }
+        .btn-check { background: #6c5ce7; color: white; width: 100%; margin-top: 10px; }
+
+        .user-site-row { display: flex; gap: 10px; margin-bottom: 8px; }
+        .user-site-row input { flex: 1; padding: 8px; border: 1px solid #dfe6e9; border-radius: 4px; }
+        
+        #feedback { margin-top: 15px; font-weight: bold; text-align: center; min-height: 24px; }
+        .group-label { background:#f1f2f6; padding:4px 10px; margin:15px 0 5px 0; font-weight:bold; font-size:0.75em; color:#4b6584; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>DNA Mapping Lab Assistant</h2>
+    <p class="subtitle">Generate a realistic restriction mapping problem to test your skills.</p>
+    
+    <div class="setup-bar">
+        <div class="input-box">
+            <label>Plasmid Size (BP)</label>
+            <div style="display:flex; align-items:center; gap:5px;">
+                <input type="number" id="minLen" value="4000">
+                <span style="font-size: 0.8em; color: #b2bec3;">to</span>
+                <input type="number" id="maxLen" value="6000">
+            </div>
+        </div>
+        <div class="input-box" style="max-width: 100px;">
+            <label>Enzymes</label>
+            <input type="number" id="maxEnz" value="3" min="2" max="5">
+        </div>
+        <button class="btn btn-gen" onclick="generateCustom()">Generate</button>
+    </div>
+
+    <div id="output-area" style="display:none;">
+        <div id="question-display"></div>
+        
+        <div style="margin-top:20px; display:flex; gap:10px;">
+            <button class="btn btn-solve" onclick="solveThis()">Transfer to Solver &rarr;</button>
+            <button class="btn btn-print" onclick="window.print()">🖨️ Print Quiz</button>
+        </div>
+
+        <div id="user-answer-section" style="margin-top: 30px; border-top: 2px dashed #dfe6e9; padding-top: 20px;">
+            <h3 style="font-size: 0.9em; color: #2d3436; margin-bottom: 15px;">Submit Your Solution Map:</h3>
+            <div id="answer-inputs">
+                </div>
+            <button class="btn btn-check" onclick="checkAnswer()">Check My Map</button>
+            <div id="feedback"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.currentConfig = null;
+
+    async function generateCustom() {
+        const payload = {
+            minLen: parseInt(document.getElementById('minLen').value),
+            maxLen: parseInt(document.getElementById('maxLen').value),
+            minEnz: parseInt(document.getElementById('maxEnz').value),
+            maxEnz: parseInt(document.getElementById('maxEnz').value)
+        };
+
+        const res = await fetch('/api/question', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        
+        const data = await res.json();
+        window.currentConfig = data; // Stores digests, raw_sites, and total_length
+
+        // 1. Build the Question HTML
+        let html = `<div style="text-align:center; margin-bottom:15px;"><b style="font-size:1.2em;">PLASMID MAP CHALLENGE</b><br>Circular DNA: ${data.total_length} bp</div>`;
+        const sortedKeys = Object.keys(data.digests).sort((a, b) => a.split('/').length - b.split('/').length);
+        
+        let currentGroup = 0;
+        sortedKeys.forEach(key => {
+            const count = key.split('/').length;
+            if (count > currentGroup) {
+                currentGroup = count;
+                const labels = ["", "SINGLE DIGESTS", "DOUBLE DIGESTS", "TRIPLE DIGESTS"];
+                html += `<div class="group-label">${labels[count]}</div>`;
+            }
+            html += `<b>${key}:</b> [${data.digests[key].join(', ')}]<br>`;
+        });
+        
+        document.getElementById('question-display').innerHTML = html;
+        document.getElementById('output-area').style.display = 'block';
+        document.getElementById('feedback').innerHTML = '';
+
+        // 2. Prepare Answer Inputs based on Ground Truth
+        const inputContainer = document.getElementById('answer-inputs');
+        inputContainer.innerHTML = '';
+        data.raw_sites.forEach((site, index) => {
+            const row = document.createElement('div');
+            row.className = 'user-site-row';
+            row.innerHTML = `
+                <input type="text" class="ans-enz" placeholder="Enzyme (e.g. EcoRI)">
+                <input type="number" class="ans-pos" placeholder="Position (BP)">
+            `;
+            inputContainer.appendChild(row);
+        });
+    }
+
+    function solveThis() {
+        if (!window.currentConfig) return;
+        const encoded = encodeURIComponent(JSON.stringify(window.currentConfig));
+        window.location.href = `/?config=${encoded}`;
+    }
+
+    function checkAnswer() {
+        if (!window.currentConfig) return;
+        
+        const groundTruth = window.currentConfig.raw_sites;
+        const L = window.currentConfig.total_length;
+        const userSites = [];
+        
+        document.querySelectorAll('.user-site-row').forEach(row => {
+            const enz = row.querySelector('.ans-enz').value.trim();
+            const pos = parseFloat(row.querySelector('.ans-pos').value);
+            if (enz && !isNaN(pos)) {
+                userSites.push({ enz, pos });
+            }
+        });
+
+        const feedback = document.getElementById('feedback');
+        
+        if (userSites.length !== groundTruth.length) {
+            feedback.innerHTML = "❌ You need to provide positions for all restriction sites.";
+            feedback.style.color = "#ff7675";
+            return;
+        }
+
+        const isCorrect = validateCircularMap(userSites, groundTruth, L);
+        
+        if (isCorrect) {
+            feedback.innerHTML = "✅ Correct! This map is a mathematically valid solution.";
+            feedback.style.color = "#00b894";
+        } else {
+            feedback.innerHTML = "❌ Incorrect. Your site distances do not match the digest data.";
+            feedback.style.color = "#ff7675";
+        }
+    }
+
+    function validateCircularMap(user, truth, L) {
+        // Try every user site as a potential "Site 0" to align with truth[0]
+        for (let i = 0; i < user.length; i++) {
+            // Normal Orientation
+            const offset = (truth[0].pos - user[i].pos + L) % L;
+            if (matchSites(user, truth, offset, L, false)) return true;
+            
+            // Flipped Orientation
+            if (matchSites(user, truth, offset, L, true)) return true;
+        }
+        return false;
+    }
+
+    function matchSites(user, truth, offset, L, reflected) {
+        const transformed = user.map(s => {
+            let newPos = (s.pos + offset) % L;
+            if (reflected) newPos = (L - newPos) % L;
+            return { enz: s.enz.toLowerCase(), pos: Math.round(newPos) };
+        });
+
+        const truthSet = new Set(truth.map(t => `${t.enz.toLowerCase()}-${Math.round(t.pos)}`));
+        return transformed.every(s => truthSet.has(`${s.enz}-${s.pos}`));
+    }
+</script>
+</body>
+</html>
